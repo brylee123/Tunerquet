@@ -26,12 +26,21 @@ class PairingTarget private constructor(val host: String, val port: Int) {
     }
 }
 
-data class PairedDevice(val guid: String, val host: String, val pairingPort: Int, val pairedAt: Long)
+data class PairedDevice(
+    val guid: String, val host: String, val pairingPort: Int, val pairedAt: Long,
+    val serverKeySha256: String? = null, val connectionPort: Int? = null
+)
 
 interface PairedDeviceStore {
     fun save(device: PairedDevice)
     fun list(): List<PairedDevice>
     fun forget(guid: String)
+    fun pinServerKey(device: PairedDevice, key: String, port: Int): PairedDevice = synchronized(this) {
+        require(key.matches(Regex("[0-9a-f]{64}")) && port in 1..65535)
+        check(list().singleOrNull { it.guid == device.guid } == device) { "Pairing record changed or was forgotten" }
+        check(device.serverKeySha256 == null || device.serverKeySha256 == key) { "Server key changed; pair again" }
+        device.copy(serverKeySha256 = key, connectionPort = port).also(::save)
+    }
 }
 
 /** Pairing has no ADB shell/connection API. A successful result is an authenticated GUID. */

@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.os.Handler
 import android.os.Looper
 import com.tunerquet.app.adb.*
+import com.tunerquet.app.inventory.*
 import java.util.concurrent.Executor
 import android.graphics.Color
 import android.graphics.Typeface
@@ -22,6 +23,13 @@ class MainActivity : Activity() {
     private var scan = ScanState()
     private lateinit var pairing: PairingSession
     private lateinit var pairedDevices: AndroidPairedDeviceStore
+    private lateinit var inventory: InventorySession
+    private var inventoryStatus: TextView? = null
+    private var inventoryTrust: LinearLayout? = null
+    private var inventoryResults: LinearLayout? = null
+    private var inventoryStart: Button? = null
+    private var inventoryCancel: Button? = null
+    private var inventoryInputs = emptyList<View>()
     private var pairingStatus: TextView? = null
     private var pairingCode: EditText? = null
     private var pairButton: Button? = null
@@ -78,9 +86,12 @@ class MainActivity : Activity() {
         val identity = AdbIdentity()
         pairing = PairingSession({ TlsPairingClient(identity) }, pairedDevices,
             Executor { mainHandler.post(it) }, { if (screen == "pairing") renderPairing(it) })
+        inventory = InventorySession({ TlsInventoryClient(identity) }, pairedDevices,
+            Executor { mainHandler.post(it) }, { if (screen == "inventory") renderInventory(it) })
         when (savedInstanceState?.getString("screen")) {
             "discovery" -> showDiscovery(false)
             "pairing" -> showPairing()
+            "inventory" -> showInventory()
             "profiles" -> showProfiles()
             "safety" -> showSafety()
             "setup" -> showInstructions()
@@ -123,6 +134,13 @@ class MainActivity : Activity() {
     }
     private fun reset(destination: String, heading: String, subtitle: String) {
         pairing.reset()
+        inventory.reset()
+        inventoryStatus = null
+        inventoryTrust = null
+        inventoryResults = null
+        inventoryStart = null
+        inventoryCancel = null
+        inventoryInputs = emptyList()
         screen = destination
         discovery.stop()
         pairingCode?.text?.clear()
@@ -150,10 +168,11 @@ class MainActivity : Activity() {
         card("Discovery is ready", "Find advertised debugging endpoints on your local network. Discovered services are unverified and may belong to any Android device.")
         button("Discover devices") { showDiscovery() }
         button("Pair using a TV code") { showPairing() }
+        button("Connect and read inventory") { showInventory() }
         button("Explore profiles · ${currentProfile.displayName}") { showProfiles() }
         button("Check package safety") { showSafety() }
         button("TV setup guide") { showInstructions() }
-        card("What comes next", "Pair using a TV code, then continue toward authenticated connection and read-only inventory. Package changes and reboot are not available in this build.")
+        card("What comes next", "Pair with your TV, then connect to read package, RAM and storage information. Package changes and reboot are not available in this build.")
     }
 
     private fun showDiscovery(start: Boolean = true) {
@@ -185,6 +204,8 @@ class MainActivity : Activity() {
             card(endpoint.kind.label, "${endpoint.name}\n${endpoint.address}\nUnverified advertisement", results)
             if (endpoint.kind == EndpointKind.PAIRING) {
                 button("Pair with ${endpoint.address}", results) { showPairing(endpoint) }
+            } else if (endpoint.kind == EndpointKind.CONNECT) {
+                button("Connect to ${endpoint.address}", results) { showInventory(endpoint) }
             }
         }
         if (!scan.scanning && scan.endpoints.isNotEmpty()) {
@@ -212,7 +233,7 @@ class MainActivity : Activity() {
                 details.text = currentProfile.description
             }
         }
-        card("Protected in every profile", "Core services, launchers, keyboards, TV inputs and known dependencies stay locked. Uncertain packages stay enabled. No inventory has been collected yet.")
+        card("Protected in every profile", "Core services, launchers, keyboards, TV inputs and known dependencies stay locked. Uncertain packages stay enabled. Inventory readings never approve package changes or replace device dependency analysis.")
         button("Back to home") { showHome() }
     }
 
@@ -302,6 +323,7 @@ class MainActivity : Activity() {
         }
         remembered.forEach { device ->
             card("Previously paired", "${device.host}\nDevice identity: ${device.guid}\nSaved pairing record; current connection has not been checked.", box)
+            button("Read inventory for ${device.host}", box) { showInventory(selectedGuid = device.guid) }
             button("Forget ${device.host}", box) {
                 AlertDialog.Builder(this).setTitle("Forget local pairing record?")
                     .setMessage("This removes the saved record from this phone. To revoke access, remove Tunerquet from the TV paired devices in Wireless Debugging. The app key is shared with other paired TVs.")
@@ -323,6 +345,124 @@ class MainActivity : Activity() {
         if (state.phase == PairingPhase.PAIRED) renderSavedPairings()
     }
 
+    private fun showInventory(endpoint: DebugEndpoint? = null, selectedGuid: String? = null) {
+        reset("inventory", "Read your TV inventory", "Select a paired TV and enter the connection port from Wireless Debugging. This is different from the pairing port. No packages or settings will be changed.")
+        val devices = try { pairedDevices.list() } catch (_: Exception) { emptyList() }
+        if (devices.isEmpty()) {
+            card("Pair with a TV first", "Inventory requires a saved pairing record. Discovery alone cannot authorize a connection.")
+            button("Pair using a TV code") { showPairing() }
+            button("Back to home") { showHome() }
+            return
+        }
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, devices.map { "${it.host} · ${it.guid}" })
+            contentDescription = "Paired TV"
+            minimumHeight = dp(52)
+            setSelection(devices.indexOfFirst { it.guid == selectedGuid || (selectedGuid == null && it.host == endpoint?.host) }.coerceAtLeast(0))
+        }
+        content.addView(spinner)
+        fun field(label: String): EditText = EditText(this).also {
+            it.hint = label
+            it.contentDescription = label
+            it.setSingleLine(true)
+            it.isSaveEnabled = false
+            content.addView(it, LinearLayout.LayoutParams(-1, -2))
+        }
+        val host = field("TV IP address")
+        val port = field("Connection port").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        fun selectDevice() {
+            val device = devices[spinner.selectedItemPosition]
+            host.setText(endpoint?.host ?: device.host)
+            port.setText(endpoint?.port?.toString() ?: device.connectionPort?.toString() ?: "")
+        }
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { selectDevice() }
+        }
+        selectDevice()
+        val approve = CheckBox(this).apply { setText(R.string.inventory_approval); content.addView(this) }
+        inventoryInputs = listOf(spinner, host, port, approve)
+        inventoryStatus = text("").apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        inventoryStart = button("Connect and read inventory") {
+            try {
+                inventory.start(devices[spinner.selectedItemPosition].guid,
+                    ConnectionTarget.parse(host.text.toString(), port.text.toString()), approve.isChecked)
+            } catch (e: IllegalArgumentException) { inventoryStatus?.text = e.message }
+            catch (_: IllegalStateException) { inventoryStatus?.setText(R.string.inventory_running) }
+        }
+        inventoryCancel = button("Cancel and disconnect") { inventory.cancel() }
+        inventoryTrust = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; content.addView(this) }
+        inventoryResults = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; content.addView(this) }
+        button("Back to home") { showHome() }
+        renderInventory(inventory.state)
+    }
+
+    private fun renderInventory(state: InventoryState) {
+        inventoryStatus?.text = state.message
+        val running = state.phase in setOf(InventoryPhase.CONNECTING, InventoryPhase.TRUST_REQUIRED, InventoryPhase.READING)
+        inventoryInputs.forEach { it.isEnabled = !running }
+        inventoryStart?.isEnabled = !running
+        inventoryCancel?.visibility = if (running) View.VISIBLE else View.GONE
+        inventoryTrust?.apply {
+            removeAllViews()
+            if (state.phase == InventoryPhase.TRUST_REQUIRED) {
+                card("Approve the first server key", "Android pairing authorizes the app key on the TV; it does not verify this server key. Confirm the IP on your TV and use a trusted local network before accepting. No inventory command has been sent.\n\nSHA-256 server public-key fingerprint:\n${state.serverKey}\n\nA changed key will block future reads. Android can replace this key after a restart; pair and trust again if that happens.", this)
+                button("Trust this server key and read inventory", this) {
+                    try { inventory.approveFirstServerKey() }
+                    catch (_: IllegalStateException) { inventoryStatus?.setText(R.string.inventory_trust_expired) }
+                }
+            }
+        }
+        val results = inventoryResults ?: return
+        results.removeAllViews()
+        val snapshot = state.snapshot ?: return
+        val time = java.text.DateFormat.getDateTimeInstance().format(java.util.Date(snapshot.completedAt))
+        card(if (snapshot.complete) "Inventory snapshot" else "Partial inventory snapshot", "${snapshot.address}\n$time\nConnection closed. Readings can change; refresh to collect a new snapshot.\nCleanup stays locked pending device dependency analysis.", results)
+        val model = snapshot.properties["ro.product.model"] ?: "Unknown model"
+        val vendor = snapshot.properties["ro.product.manufacturer"] ?: "Unknown manufacturer"
+        val sdk = snapshot.properties["ro.build.version.sdk"] ?: "Unknown"
+        card("Device", "$vendor · $model\nAndroid API $sdk\nPaired identity: ${snapshot.guid}", results)
+        fun mib(value: Long?) = value?.let { String.format(java.util.Locale.getDefault(), "%.1f MiB", it / 1048576.0) } ?: "Unknown"
+        snapshot.ram?.let { ram ->
+            card("RAM", "Total: ${mib(ram.totalBytes)}\nAvailable: ${mib(ram.availableBytes)}\nFree: ${mib(ram.freeBytes)}\nCached: ${mib(ram.cachedBytes)}\nCached and free memory are separate readings; they are not storage space or promised cleanup gains.", results)
+        } ?: card("RAM", "Unavailable; no reading was inferred.", results)
+        snapshot.storage?.let { storage ->
+            card("Data storage · disk", "Total: ${mib(storage.totalBytes)}\nUsed: ${mib(storage.usedBytes)}\nAvailable: ${mib(storage.availableBytes)}\nReported mount: ${storage.mountPoint}\nThis is data filesystem space, separate from RAM.", results)
+        } ?: card("Data storage · disk", "Unavailable; no reading was inferred.", results)
+        snapshot.warnings.forEach { card("Reading issue", it, results) }
+        text("Installed packages · user 0 · ${snapshot.packages.size}", 20f, results, true)
+        val search = EditText(this).apply { hint = "Filter package names"; contentDescription = "Filter package names"; setSingleLine(true) }
+        results.addView(search)
+        val packages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; results.addView(this) }
+        fun showPackages() {
+            packages.removeAllViews()
+            val filtered = snapshot.packages.filter { it.name.contains(search.text.toString().trim(), ignoreCase = true) }
+            text("Showing ${minOf(50, filtered.size)} of ${filtered.size} matches. Narrow the filter to see more.", 14f, packages)
+            filtered.take(50).forEach { pkg ->
+                val system = when (pkg.systemApp) { true -> "System app"; false -> "User app"; null -> "App type unknown" }
+                val enabled = when (pkg.disabled) { true -> "Disabled"; false -> "Enabled"; null -> "Enabled state unknown" }
+                val safety = Safety.assess(pkg.name)
+                card(pkg.name, "$system · $enabled\nVersion: ${pkg.versionName ?: "Unknown"} (${pkg.versionCode ?: "Unknown"})\nUID: ${pkg.uid}\n${pkg.apkPath}\n${safety.risk}: ${safety.reason}", packages)
+            }
+        }
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { showPackages() }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        showPackages()
+        text("Read diagnostics", 20f, results, true)
+        snapshot.readings.forEach { reading ->
+            button("${reading.command.title} · ${if (reading.problem == null) "read" else "issue"}", results) {
+                val result = reading.result
+                val detail = "${reading.command.command}\n${reading.problem ?: "Completed"}\nExit: ${result?.exitCode ?: "Unknown"}\n\nSTDOUT\n${result?.stdout.orEmpty()}\n\nSTDERR\n${result?.stderr.orEmpty()}"
+                val preview = if (detail.length > 12000) detail.take(12000) + "\n[Preview clipped at 12,000 characters]" else detail
+                val view = TextView(this).apply { text = preview; setPadding(dp(20), dp(12), dp(20), dp(12)); setTextIsSelectable(true) }
+                AlertDialog.Builder(this).setTitle(reading.command.title)
+                    .setView(ScrollView(this).apply { addView(view) }).setPositiveButton("Close", null).show()
+            }
+        }
+    }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("screen", screen)
         super.onSaveInstanceState(outState)
@@ -332,6 +472,6 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (screen != "home") showHome() else super.onBackPressed()
     }
-    override fun onStop() { pairingCode?.text?.clear(); pairing.cancel(); discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
-    override fun onDestroy() { pairing.close(); discovery.stop(); super.onDestroy() }
+    override fun onStop() { inventory.cancel(); pairingCode?.text?.clear(); pairing.cancel(); discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
+    override fun onDestroy() { inventory.close(); pairing.close(); discovery.stop(); super.onDestroy() }
 }

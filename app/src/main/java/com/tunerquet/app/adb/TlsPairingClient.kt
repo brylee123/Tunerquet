@@ -61,7 +61,7 @@ class TlsPairingClient(private val identity: AdbIdentity) : PairingClient {
         active?.close()
     }
 
-    private class ClientKeyManager(private val credentials: AdbIdentity.Credentials) : X509ExtendedKeyManager() {
+    internal class ClientKeyManager(private val credentials: AdbIdentity.Credentials) : X509ExtendedKeyManager() {
         override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? =
             if (keyType == "RSA") arrayOf("adb") else null
         override fun chooseClientAlias(keyType: Array<out String>?, issuers: Array<out Principal>?, socket: Socket?): String? =

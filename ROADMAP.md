@@ -1,5 +1,18 @@
 # Tunerquet implementation roadmap
 
+## v0.4: authenticated TLS connection and read-only inventory — implemented
+
+- Saved pairing record + explicit read approval required before connecting; no automatic reconnect.
+- ADB STLS and TLS 1.3 with the existing client identity; encrypted CNXN required before treating authentication as accepted.
+- Explicit first-server-key trust, public-key pinning, changed-key rejection and stale/forgotten-record protection.
+- First-contact trust is not a cryptographic binding to the pairing GUID. Users must verify the TV address on a trusted network; a changed daemon key requires re-pairing/re-trust.
+- Fixed read-only request surface: properties, user-0 package/UID/APK inventory, system/disabled lists, package diagnostics, RAM, data filesystem and process-memory diagnostics.
+- Bounded ADB framing, sequential streams, shell-v2 stdout/stderr/exit parsing, deadlines and cancellation.
+- Partial/unknown readings are explicit; broken streams skip later commands. Exposed device GUID mismatches abort before package reads.
+- Timestamped in-memory snapshots with disconnected status, package filtering, baseline rationale and bounded diagnostic previews.
+- RAM total/available/free/cached are distinct from disk usage; no savings or cleanup success claims.
+- Device-specific dependency analysis remains incomplete. Inventory never creates optional-package evidence or enables cleanup.
+- JVM regression tests plus Android TLS/ADB mock tests, actual Android output parsing, pin persistence and approval-recreation tests. Physical-TV validation remains pending.
 ## v0.3: Wireless Debugging pairing — implemented, device validation pending
 
 - Manual IP/pairing-port/code entry plus selection from discovered pairing services.
@@ -32,20 +45,20 @@ Implemented:
 
 This is partial groundwork for original roadmap items 3 and 4. Device roles, dependencies and optional-package evidence are modeled but are not collected from a TV yet. No packages become eligible through the current UI.
 
-## 1. Authenticated ADB transport — pairing implemented; connection is next
+## 1. Authenticated ADB transport — Wireless Debugging implemented; legacy pending
 
-- Wireless Debugging TLS/code pairing is implemented. Add the separate authenticated TLS connection and legacy RSA authentication.
-- AndroidKeyStore identity and local forget behavior are implemented. Add credential rotation and reconnect identity checks.
+- Wireless Debugging TLS/code pairing and authenticated TLS connections are implemented. Legacy RSA authentication remains pending; there is no plaintext fallback.
+- AndroidKeyStore identity, local forget, first-contact trust and server-key pinning are implemented. Add credential rotation and broader real-device validation.
 - Keep pairing and connection ports distinct; never send shell commands to an unpaired or unapproved target.
-- Pairing deadlines, cancellation and mock transport are implemented. Extend those guarantees to command connections.
+- Pairing and inventory connections have deadlines, cancellation, stale-result protection and mock transport coverage.
 - Wrong-code/tampering and pairing-session failure paths have automated coverage. Validate expired advertisements, actual TVs, revoked trust and identity changes on reconnect.
 
-## 2. Read-only inventory
+## 2. Read-only inventory — implemented; device coverage pending
 
-- Collect `pm list packages -f -U`, `dumpsys package` and disabled-package state.
-- Collect `/proc/meminfo`, `df` and `dumpsys meminfo` with timestamps and device metadata.
-- Distinguish RAM, available/cached memory and storage; record partial/failed reads honestly.
-- Parse through a tested read-only inventory layer before exposing real package proposals.
+- Implemented user-0 APK/UID inventory, `dumpsys package`, and explicit disabled/system package lists.
+- Implemented `/proc/meminfo`, `df -k /data` (including data bind mounts) and `dumpsys meminfo`, with timestamps and device metadata.
+- RAM, available/free/cached readings and disk are separate; partial/failed/malformed reads remain explicit and unknown.
+- Parsers, shell framing and inventory lifecycle have regression/instrumentation coverage. Real package proposals remain blocked on device safety analysis.
 
 ## 3. Device-specific safety classification — foundation implemented
 
