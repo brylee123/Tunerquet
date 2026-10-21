@@ -1,34 +1,49 @@
-# Tunerquet v0.2 — Android TV companion prototype
+# Tunerquet v0.3 — Android TV companion prototype
 
-Tunerquet is a handset companion for Android TV / Google TV optimization. This build provides **read-only discovery, profile planning and baseline safety explanations**. It does not yet implement authenticated ADB, installed-package inventory, memory measurements, cleanup execution, rollback, settings modifications or reboot.
+Tunerquet is a handset companion for Android TV / Google TV optimization. This build provides discovery, **explicit Wireless Debugging pairing**, profile planning and baseline safety explanations. Pairing authorizes the app key on the selected TV. The app does not yet open an authenticated ADB command session, inspect installed apps, measure memory, execute cleanup, roll back changes, modify TV settings or reboot a TV.
 
 ## Build and run
 
 1. Open this folder in Android Studio and install Android SDK Platform 35.
 2. Use JDK 17 or newer (verified here with JDK 21).
-3. Let Gradle synchronize. The included wrapper uses Gradle 8.11.1 with a pinned distribution SHA-256; its JAR was verified against Gradle's published checksum.
-4. Run on an Android handset or emulator (Android 8.0 / API 26 or newer).
+3. Let Gradle synchronize. The included Gradle 8.11.1 wrapper has a pinned distribution checksum and verified wrapper JAR.
+4. Run on an Android handset or emulator (API 26 or newer).
 
-From PowerShell, with `ANDROID_HOME` pointing to your SDK (or `sdk.dir` in an untracked `local.properties`):
+With `ANDROID_HOME` pointing to your SDK (or `sdk.dir` in an untracked `local.properties`):
 
 ```powershell
 ./gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. First use requires internet access to download build dependencies.
+To exercise the shipping native SPAKE2 implementation, AndroidKeyStore and TLS provider, connect an emulator/test handset and run:
 
-## Current functionality
+```powershell
+./gradlew.bat :app:connectedDebugAndroidTest
+```
+
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. First use requires internet access for build dependencies. The native SPAKE2 dependency is fetched from JitPack with an exclusive repository filter; Conscrypt comes from Maven Central. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for versions, licenses and rebuild references.
+
+## Pair a TV
+
+1. On an Android 11+ TV that supports Wireless Debugging, open **Pair device with pairing code**. Menu names vary by manufacturer.
+2. Discover the pairing service in Tunerquet, or select **Pair using a TV code** and enter its IP address and pairing port manually. Hostnames and URLs are not accepted. The pairing port differs from the connection port.
+3. Enter the fresh six-digit code, confirm the selected TV and select **Pair with this TV**.
+4. Wait for a confirmed pairing response. Pairing success means a verified pairing exchange completed and device metadata was saved; it does not mean an ADB command session is connected.
+
+The app uses TLS 1.3, a TLS-exporter-bound SPAKE2 proof, authenticated peer-info exchange and Android's RSA public-key format. The client RSA private key is generated in AndroidKeyStore and remains non-exportable. Codes are not persisted, logged or restored after Activity recreation, and the entry field is cleared on submission/background/navigation. Socket operations have deadlines and a 30-second overall timeout; cancellation closes the raw socket and rejects late completion.
+
+Saved records contain the authenticated GUID, IP, pairing port and time, in an atomic file under `noBackupFilesDir`. **Forget record** removes local metadata; it cannot revoke the already trusted key on a TV. Remove Tunerquet from the TV's paired devices to revoke access. One app identity is shared across paired TVs. No automatic reconnect or shell-command API is exposed in this increment.
+
+## Other current functionality
 
 - Native screens with density-aware spacing, system-bar insets, accessible headings/status updates and an adaptive launcher icon.
-- Bounded 30-second mDNS scans for secure connection, pairing and legacy ADB services, with typed endpoints, IPv6 formatting, error reporting, rescan and stop controls.
-- Sequential NSD resolution, removal of lost services and rejection of late results after stop or restart. Scanning stops when the Activity leaves the foreground.
-- Five planning profiles; the selected preset survives navigation and app restarts. Custom package selection, saving and export remain planned.
-- Baseline package safety checker with human-readable rationale. No TV is inspected by this screen.
-- Device safety context for active launchers, input methods, required components and their dependencies. These protections override optional-package evidence.
-- Fail-closed authorization: caller-supplied low risk is insufficient. The policy also requires verified inventory, device-specific optional evidence and explicit approval. There is no command execution path in this build.
+- Bounded mDNS scans for secure connection, pairing and legacy ADB services, with IPv6 formatting, errors, rescan/stop, lost-service handling and stale-callback filtering.
+- Five planning profiles; the selected preset survives navigation and app restarts. Custom selection/export remain planned.
+- Baseline package safety checker with human-readable rationale. This screen does not inspect a TV.
+- Fail-closed safety policy requiring verified device inventory, optional-package evidence and approval. Core components and required dependencies always override optional evidence. Pairing never makes packages eligible for cleanup.
 
-## Roadmap and validation
+## Validation and next steps
 
-See [ROADMAP.md](ROADMAP.md) for implementation status and the next milestones. Secure authentication is the next major dependency before real inventory can be connected to the safety engine.
+See [ROADMAP.md](ROADMAP.md) for status. Validation: 29 JVM tests and 13 Android-native protocol/TLS/storage/UI tests passed on an API 37 x86_64 emulator. The debug APK builds successfully. Android lint reports no issues (zero errors or warnings). Real Android TV / Google TV pairing, minimum-API devices, ARM ABIs and 16 KB page-size devices still need validation. No physical TV was contacted.
 
-On October 20, 2026, the debug APK built successfully and all 15 JVM tests passed using SDK 35 / JDK 21. Android lint reported no issues (zero errors or warnings). No emulator or physical device was connected, so runtime layout, back gestures and real-network discovery still need the manual checks in the roadmap. The unit tests cover safety decisions and endpoint formatting; they do not simulate Android NSD callbacks.
+The next milestone is an authenticated connection to the separate connection port, followed by read-only inventory. Legacy RSA authentication, reconnect identity policy and credential rotation remain pending.

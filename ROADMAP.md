@@ -1,5 +1,19 @@
 # Tunerquet implementation roadmap
 
+## v0.3: Wireless Debugging pairing — implemented, device validation pending
+
+- Manual IP/pairing-port/code entry plus selection from discovered pairing services.
+- Explicit TV approval; no pairing request before approval and input validation.
+- TLS 1.3 bootstrap with exporter-bound SPAKE2 and authenticated GUID exchange.
+- AndroidKeyStore RSA-2048 identity, sign-only and non-exportable, with the raw signing padding required by Conscrypt TLS 1.3.
+- Atomic authenticated metadata under `noBackupFilesDir`; no persisted pairing code or exported private key.
+- 8-second TCP connect timeout, 10-second socket read timeouts and a 30-second overall deadline.
+- Cancel/background/navigation abort the transport; old callbacks cannot save or overwrite a newer attempt.
+- Local forget UI explains that revocation must happen on the TV and that the app key is shared.
+- Mock-session tests, native protocol tests (including wrong codes/tampering), full TLS/KeyStore loopback integration and code-entry recreation test.
+- Native SPAKE2 artifact is used; the pure-Java artifact was rejected during validation.
+
+Pairing confirms a trust exchange. It does not open an ADB command session or prove a TV is currently connected/healthy. No physical TV was contacted in development.
 ## v0.2: discovery polish and safety foundations
 
 Implemented:
@@ -18,13 +32,13 @@ Implemented:
 
 This is partial groundwork for original roadmap items 3 and 4. Device roles, dependencies and optional-package evidence are modeled but are not collected from a TV yet. No packages become eligible through the current UI.
 
-## 1. Authenticated ADB transport — next
+## 1. Authenticated ADB transport — pairing implemented; connection is next
 
-- Implement documented secure ADB TLS pairing/connect and legacy RSA authentication.
-- Store device credentials securely; define revoke/forget behavior and device identity checks.
+- Wireless Debugging TLS/code pairing is implemented. Add the separate authenticated TLS connection and legacy RSA authentication.
+- AndroidKeyStore identity and local forget behavior are implemented. Add credential rotation and reconnect identity checks.
 - Keep pairing and connection ports distinct; never send shell commands to an unpaired or unapproved target.
-- Add connection deadlines, cancellation, actionable errors and a mock transport.
-- Test wrong pairing codes, expired services, rejected authorization, disconnects and identity changes.
+- Pairing deadlines, cancellation and mock transport are implemented. Extend those guarantees to command connections.
+- Wrong-code/tampering and pairing-session failure paths have automated coverage. Validate expired advertisements, actual TVs, revoked trust and identity changes on reconnect.
 
 ## 2. Read-only inventory
 
@@ -77,4 +91,4 @@ Pending manual checks for this increment:
 - Exercise discovery start/resolve/stop failures, including partial failure across service types.
 - Confirm no ADB connection or command is sent during discovery or safety/profile browsing.
 
-Before implementing execution, add mock-transport tests and validate on Android TV, Google TV, sticks and OEM-integrated sets.
+Additional pairing validation before release: real Android TV / Google TV, API 26 clients, ARM ABIs, 16 KB page-size devices, expired pairing dialogs, and physical Wi-Fi disruptions. Automated Android tests currently exercise native crypto, TLS and KeyStore on an API 37 x86_64 emulator. Validate on TVs, sticks and OEM-integrated sets before implementing execution.

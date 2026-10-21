@@ -6,4 +6,7 @@
     </plurals>
     <string name="safety_result">%1$s\n%2$s</string>
     <color name="launcher_background">#00665E</color>
+    <string name="pairing_approval">I selected this TV and want to authorize the Tunerquet debugging key.</string>
+    <string name="pairing_already_running">A pairing attempt is already running. Cancel it before retrying.</string>
+    <string name="pairing_forget_failed">The saved record could not be removed. Try again.</string>
 </resources>

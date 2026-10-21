@@ -1,6 +1,11 @@
 package com.tunerquet.app
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.os.Handler
+import android.os.Looper
+import com.tunerquet.app.adb.*
+import java.util.concurrent.Executor
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -15,6 +20,14 @@ class MainActivity : Activity() {
     private lateinit var content: LinearLayout
     private lateinit var discovery: Discovery
     private var scan = ScanState()
+    private lateinit var pairing: PairingSession
+    private lateinit var pairedDevices: AndroidPairedDeviceStore
+    private var pairingStatus: TextView? = null
+    private var pairingCode: EditText? = null
+    private var pairButton: Button? = null
+    private var cancelPairButton: Button? = null
+    private var pairingInputs = emptyList<View>()
+    private var pairedRecords: LinearLayout? = null
     private var screen = "home"
     private var currentProfile = Profile.CONSERVATIVE
     private var scanStatus: TextView? = null
@@ -42,6 +55,9 @@ class MainActivity : Activity() {
         scroll.addView(content)
         setContentView(scroll)
         if (Build.VERSION.SDK_INT >= 30) {
+            val lightBars = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(lightBars, lightBars)
             scroll.setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -57,8 +73,14 @@ class MainActivity : Activity() {
             scan = state
             if (screen == "discovery") renderScan()
         }
+        pairedDevices = AndroidPairedDeviceStore(this)
+        val mainHandler = Handler(Looper.getMainLooper())
+        val identity = AdbIdentity()
+        pairing = PairingSession({ TlsPairingClient(identity) }, pairedDevices,
+            Executor { mainHandler.post(it) }, { if (screen == "pairing") renderPairing(it) })
         when (savedInstanceState?.getString("screen")) {
             "discovery" -> showDiscovery(false)
+            "pairing" -> showPairing()
             "profiles" -> showProfiles()
             "safety" -> showSafety()
             "setup" -> showInstructions()
@@ -77,12 +99,12 @@ class MainActivity : Activity() {
             it.setPadding(0, dp(6), 0, dp(14))
             parent.addView(it)
         }
-    private fun button(label: String, action: () -> Unit): Button = Button(this).also {
+    private fun button(label: String, parent: LinearLayout = content, action: () -> Unit): Button = Button(this).also {
         it.text = label
         it.isAllCaps = false
         it.setTextColor(accent)
         it.minHeight = dp(52)
-        content.addView(it, LinearLayout.LayoutParams(-1, -2))
+        parent.addView(it, LinearLayout.LayoutParams(-1, -2))
         it.setOnClickListener { action() }
     }
     private fun card(heading: String, body: String, parent: LinearLayout = content) {
@@ -100,14 +122,22 @@ class MainActivity : Activity() {
         text(body, parent = box)
     }
     private fun reset(destination: String, heading: String, subtitle: String) {
+        pairing.reset()
         screen = destination
         discovery.stop()
+        pairingCode?.text?.clear()
+        pairingCode = null
+        pairingStatus = null
+        pairButton = null
+        cancelPairButton = null
+        pairingInputs = emptyList()
+        pairedRecords = null
         scanStatus = null
         scanResults = null
         scanButton = null
         scanProgress = null
         content.removeAllViews()
-        text("TUNERQUET  /  READ ONLY", 12f, bold = true)
+        text("TUNERQUET  /  NO PACKAGE CHANGES", 12f, bold = true)
         text(heading, 30f, bold = true).accessibilityHeadingCompat()
         text(subtitle)
     }
@@ -119,10 +149,11 @@ class MainActivity : Activity() {
         reset("home", "A clearer view of your TV", "Discover debugging services and explore safer cleanup plans.")
         card("Discovery is ready", "Find advertised debugging endpoints on your local network. Discovered services are unverified and may belong to any Android device.")
         button("Discover devices") { showDiscovery() }
+        button("Pair using a TV code") { showPairing() }
         button("Explore profiles · ${currentProfile.displayName}") { showProfiles() }
         button("Check package safety") { showSafety() }
         button("TV setup guide") { showInstructions() }
-        card("What comes next", "Secure pairing → read-only inventory → verified proposals → your approval. Pairing, package changes and reboot are not available in this build.")
+        card("What comes next", "Pair using a TV code, then continue toward authenticated connection and read-only inventory. Package changes and reboot are not available in this build.")
     }
 
     private fun showDiscovery(start: Boolean = true) {
@@ -151,7 +182,10 @@ class MainActivity : Activity() {
                 "Keep Wireless Debugging open on the TV. If nothing appears, check Wi-Fi, guest network isolation and VPN settings, then scan again.", results)
         }
         scan.endpoints.forEach { endpoint ->
-            card(endpoint.kind.label, "${endpoint.name}\n${endpoint.address}\nUnverified advertisement · pairing is not yet available", results)
+            card(endpoint.kind.label, "${endpoint.name}\n${endpoint.address}\nUnverified advertisement", results)
+            if (endpoint.kind == EndpointKind.PAIRING) {
+                button("Pair with ${endpoint.address}", results) { showPairing(endpoint) }
+            }
         }
         if (!scan.scanning && scan.endpoints.isNotEmpty()) {
             text("Results are from the last scan and may have changed.", 14f, results)
@@ -207,10 +241,86 @@ class MainActivity : Activity() {
         card("1 · Use your local network", "Connect the phone and TV to the same trusted network. Guest network isolation can prevent discovery.")
         card("2 · Enable developer options", "On the TV, open Settings → System / Device Preferences → About. Select Build repeatedly until developer options are enabled.")
         card("3 · Open Wireless Debugging", "Enable Wireless Debugging in developer options. Choose Pair device with pairing code to advertise the pairing service. Older TVs may only support legacy ADB.")
-        card("4 · Discover services", "Return to Discover devices. A result confirms only an advertisement. Secure pairing and authentication are planned; do not enter your pairing code into unrelated websites.")
+        card("4 · Discover services", "Select a pairing service or enter the TV address and pairing port manually. Enter the fresh six-digit code only in the pairing screen. The pairing port differs from the connection port.")
         card("When you finish", "Turn off Wireless Debugging when you no longer need it.")
         button("Discover devices") { showDiscovery() }
+        button("Pair using a TV code") { showPairing() }
         button("Back to home") { showHome() }
+    }
+
+    private fun showPairing(endpoint: DebugEndpoint? = null) {
+        reset("pairing", "Pair with your TV", "On Android 11+ TVs, open Wireless Debugging → Pair device with pairing code. Use the IP address, pairing port and fresh six-digit code from that dialog.")
+        fun field(label: String, initial: String = "", numeric: Boolean = false): EditText = EditText(this).also {
+            it.hint = label
+            it.contentDescription = label
+            it.setSingleLine(true)
+            it.isSaveEnabled = false
+            it.inputType = if (numeric) android.text.InputType.TYPE_CLASS_NUMBER else
+                android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            it.setText(initial)
+            content.addView(it, LinearLayout.LayoutParams(-1, -2))
+        }
+        val host = field("TV IP address", endpoint?.host ?: "")
+        val port = field("Pairing port", endpoint?.port?.toString() ?: "", true)
+        val code = field("Six-digit pairing code", numeric = true).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            filters = arrayOf(android.text.InputFilter.LengthFilter(6))
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
+        pairingCode = code
+        val approve = CheckBox(this).apply {
+            setText(R.string.pairing_approval)
+            content.addView(this)
+        }
+        pairingInputs = listOf(host, port, code, approve)
+        pairingStatus = text("").apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        pairButton = button("Pair with this TV") {
+            try {
+                val target = PairingTarget.parse(host.text.toString(), port.text.toString())
+                val chars = CharArray(code.length()) { code.text[it] }
+                code.text.clear()
+                pairing.start(target, chars, approve.isChecked)
+            } catch (e: IllegalArgumentException) {
+                pairingStatus?.text = e.message
+            } catch (_: IllegalStateException) {
+                pairingStatus?.setText(R.string.pairing_already_running)
+            }
+        }
+        cancelPairButton = button("Cancel pairing") { pairing.cancel() }
+        card("Pairing is an authorization", "Pairing lets this TV trust the app debugging key. The key stays in AndroidKeyStore. The code is not saved. Pairing does not open an ADB session, inspect apps or authorize cleanup.")
+        pairedRecords = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; content.addView(this) }
+        renderSavedPairings()
+        button("Back to home") { showHome() }
+        renderPairing(pairing.state)
+    }
+    private fun renderSavedPairings() {
+        val box = pairedRecords ?: return
+        box.removeAllViews()
+        val remembered = try { pairedDevices.list() } catch (_: Exception) {
+            text("Saved pairing metadata could not be read. No connection will be attempted.", parent = box)
+            emptyList()
+        }
+        remembered.forEach { device ->
+            card("Previously paired", "${device.host}\nDevice identity: ${device.guid}\nSaved pairing record; current connection has not been checked.", box)
+            button("Forget ${device.host}", box) {
+                AlertDialog.Builder(this).setTitle("Forget local pairing record?")
+                    .setMessage("This removes the saved record from this phone. To revoke access, remove Tunerquet from the TV paired devices in Wireless Debugging. The app key is shared with other paired TVs.")
+                    .setPositiveButton("Forget record") { _, _ ->
+                        try { pairedDevices.forget(device.guid); showPairing() }
+                        catch (_: Exception) { pairingStatus?.setText(R.string.pairing_forget_failed) }
+                    }.setNegativeButton("Keep", null).show()
+            }
+        }
+    }
+
+    private fun renderPairing(state: PairingState) {
+        pairingStatus?.text = state.message
+        val running = state.phase == PairingPhase.PAIRING
+        pairButton?.isEnabled = !running
+        cancelPairButton?.isEnabled = running
+        cancelPairButton?.visibility = if (running) View.VISIBLE else View.GONE
+        pairingInputs.forEach { it.isEnabled = !running }
+        if (state.phase == PairingPhase.PAIRED) renderSavedPairings()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -222,6 +332,6 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (screen != "home") showHome() else super.onBackPressed()
     }
-    override fun onStop() { discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
-    override fun onDestroy() { discovery.stop(); super.onDestroy() }
+    override fun onStop() { pairingCode?.text?.clear(); pairing.cancel(); discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
+    override fun onDestroy() { pairing.close(); discovery.stop(); super.onDestroy() }
 }
