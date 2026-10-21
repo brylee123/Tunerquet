@@ -1,5 +1,18 @@
 # Tunerquet implementation roadmap
 
+## v0.5: disable-only cleanup and journaled restore — implemented, physical-TV validation pending
+
+- Separate cleanup connection/check approval and complete selected-batch review; no default selections or automatic profile execution.
+- Fresh pinned TLS session, active-user-0 enforcement, system/disabled/UID checks, HOME handlers and installed input methods.
+- Initial manual selection is limited to the small recognized user-installed media-app catalog. Unknown/system/updated-system/shared/required/library packages stay locked; optional-system evidence and complete dependency analysis remain future work.
+- Only pm disable-user --user 0 changes cleanup state. No uninstall, clear-data, settings or reboot actions.
+- Atomic write-ahead journal records identity, original enabled state and uncertain/verified status before each command.
+- Exact enabled-state readback; failed or uncertain operations stop the batch and preserve earlier records.
+- Explicit individual restore uses default-state or enable according to original state; pre-disabled apps never enter cleanup.
+- Changed pin, pairing record, app identity/version or externally changed state blocks restore pending manual inspection.
+- Background/navigation/cancel/deadline closes transport. Five-minute review limit; no approval survives recreation; in-flight commands remain uncertain.
+- JVM failure/recovery regression tests, real TLS command gating, Android journal/recreation checks and actual emulator fixture disable/restore with APK/data retention. Real-TV/API26/ARM validation remains pending.
+
 ## v0.4: authenticated TLS connection and read-only inventory — implemented
 
 - Saved pairing record + explicit read approval required before connecting; no automatic reconnect.
@@ -58,7 +71,7 @@ This is partial groundwork for original roadmap items 3 and 4. Device roles, dep
 - Implemented user-0 APK/UID inventory, `dumpsys package`, and explicit disabled/system package lists.
 - Implemented `/proc/meminfo`, `df -k /data` (including data bind mounts) and `dumpsys meminfo`, with timestamps and device metadata.
 - RAM, available/free/cached readings and disk are separate; partial/failed/malformed reads remain explicit and unknown.
-- Parsers, shell framing and inventory lifecycle have regression/instrumentation coverage. Real package proposals remain blocked on device safety analysis.
+- Parsers, shell framing and inventory lifecycle have regression/instrumentation coverage. System-app proposals remain blocked on device safety analysis; v0.5 adds a separate narrow, reviewed user-app policy.
 
 ## 3. Device-specific safety classification — foundation implemented
 
@@ -75,12 +88,12 @@ This is partial groundwork for original roadmap items 3 and 4. Device roles, dep
 - Persist and export Custom profiles with vendor/model/package metadata.
 - Review imported profiles against current device evidence; imports cannot authorize commands.
 
-## 5. Approval, journal and rollback
+## 5. Approval, journal and rollback — initial user-app flow implemented
 
-- Review a complete batch and require extra confirmation for risky proposals.
-- Journal original state durably before each command.
-- For system packages, use `pm disable-user --user 0 PACKAGE`; restore original state with appropriate rollback.
-- Never automatically uninstall system packages or enable packages that were disabled before the session.
+- Implemented: complete selected-batch review with per-app feature-loss explanations; no system/unknown app selection.
+- Implemented: atomic write-ahead original-state journal, exact readback, uncertain recovery and individual restore.
+- Future system-package eligibility still requires device dependency evidence. All cleanup must use `pm disable-user --user 0 PACKAGE`; restore original state with appropriate rollback.
+- Never uninstall apps or enable packages that were disabled before the session. Initial cleanup/restore obeys this policy.
 
 ## 6. Settings and resilient execution
 
@@ -104,4 +117,4 @@ Pending manual checks for this increment:
 - Exercise discovery start/resolve/stop failures, including partial failure across service types.
 - Confirm no ADB connection or command is sent during discovery or safety/profile browsing.
 
-Additional pairing validation before release: real Android TV / Google TV, API 26 clients, ARM ABIs, 16 KB page-size devices, expired pairing dialogs, and physical Wi-Fi disruptions. Automated Android tests currently exercise native crypto, TLS and KeyStore on an API 37 x86_64 emulator. Validate on TVs, sticks and OEM-integrated sets before implementing execution.
+Additional pairing validation before release: real Android TV / Google TV, API 26 clients, ARM ABIs, 16 KB page-size devices, expired pairing dialogs, and physical Wi-Fi disruptions. Automated Android tests currently exercise native crypto, TLS and KeyStore on an API 37 x86_64 emulator. Validate on TVs, sticks and OEM-integrated sets before expanding execution eligibility.

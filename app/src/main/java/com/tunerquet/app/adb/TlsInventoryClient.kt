@@ -1,6 +1,7 @@
 package com.tunerquet.app.adb
 
 import android.annotation.SuppressLint
+import com.tunerquet.app.cleanup.*
 import com.tunerquet.app.inventory.InventoryCommand
 import com.tunerquet.app.inventory.ShellResult
 import org.conscrypt.Conscrypt
@@ -21,7 +22,7 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
 
 /** Only TLS/STLS + shell-v2 are supported. No AUTH/public-key enrollment or plaintext fallback. */
-class TlsInventoryClient(private val identity: AdbIdentity) : InventoryClient {
+class TlsInventoryClient(private val identity: AdbIdentity) : CleanupClient {
     private val lock = Any()
     private val deadlines = Executors.newSingleThreadScheduledExecutor()
     private var socket: Socket? = null
@@ -96,19 +97,30 @@ class TlsInventoryClient(private val identity: AdbIdentity) : InventoryClient {
         }
     }
 
-    override fun read(command: InventoryCommand): ShellResult {
+    override fun read(command: InventoryCommand): ShellResult = shell(command.command, command.maxBytes)
+    override fun inspect(read: CleanupRead): ShellResult = shell(read.command, 1024 * 1024)
+    override fun packageDetails(name: String): ShellResult {
+        CleanupPolicy.validateName(name)
+        return shell("dumpsys package $name", 4 * 1024 * 1024)
+    }
+    override fun change(name: String, action: PackageChange): ShellResult {
+        CleanupPolicy.validateName(name)
+        require(name in CleanupPolicy.optionalMedia) { "Package is not supported by cleanup" }
+        return shell("pm ${action.verb} --user 0 $name", 64 * 1024)
+    }
+    private fun shell(command: String, maxBytes: Int): ShellResult {
         check(connected && approved && !closed) { "An approved authenticated connection is required" }
         val timeout = deadlines.schedule({ close() }, 30, TimeUnit.SECONDS)
         try {
             val source = input ?: throw IOException("Disconnected")
             val sink = output ?: throw IOException("Disconnected")
             val local = nextStream++
-            val destination = "shell,v2,raw:${command.command}\u0000".toByteArray(Charsets.UTF_8)
+            val destination = "shell,v2,raw:$command\u0000".toByteArray(Charsets.UTF_8)
             if (destination.size > maxPayload) throw IOException("Peer payload limit too small")
             AdbWire.write(sink, AdbWire.Packet(AdbWire.OPEN, local, 0, destination))
             val opened = AdbWire.read(source, maxPayload)
             if (opened.command != AdbWire.OKAY || opened.arg1 != local || opened.arg0 == 0 || opened.payload.isNotEmpty()) {
-                throw IOException("ADB read-only service was rejected")
+                throw IOException("ADB shell service was rejected")
             }
             val remote = opened.arg0
             val bytes = ByteArrayOutputStream()
@@ -117,14 +129,14 @@ class TlsInventoryClient(private val identity: AdbIdentity) : InventoryClient {
                 if (packet.arg0 != remote || packet.arg1 != local) throw IOException("Unexpected ADB stream identity")
                 when (packet.command) {
                     AdbWire.WRTE -> {
-                        if (bytes.size().toLong() + packet.payload.size > command.maxBytes.toLong() + 1024 * 1024) throw IOException("Inventory output limit exceeded")
+                        if (bytes.size().toLong() + packet.payload.size > maxBytes.toLong() + 1024 * 1024) throw IOException("Shell output limit exceeded")
                         bytes.write(packet.payload)
                         AdbWire.write(sink, AdbWire.Packet(AdbWire.OKAY, local, remote))
                     }
                     AdbWire.CLSE -> {
                         if (packet.payload.isNotEmpty()) throw IOException("Invalid ADB close packet")
                         AdbWire.write(sink, AdbWire.Packet(AdbWire.CLSE, local, remote))
-                        return ShellV2.decode(bytes.toByteArray(), command.maxBytes)
+                        return ShellV2.decode(bytes.toByteArray(), maxBytes)
                     }
                     else -> throw IOException("Unexpected packet in inventory stream")
                 }

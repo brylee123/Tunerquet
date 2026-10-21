@@ -1,6 +1,7 @@
 package com.tunerquet.app.adb
 
 import com.tunerquet.app.inventory.InventoryCommand
+import com.tunerquet.app.cleanup.*
 import org.conscrypt.Conscrypt
 import org.junit.Assert.*
 import org.junit.Test
@@ -31,7 +32,8 @@ class AdbConnectionIntegrationTest {
         private val rejectClient: Boolean = false,
         private val wrongStream: Boolean = false,
         private val banner: String = "device::ro.product.model=Test TV;features=shell_v2;",
-        private val omitAcceptance: Boolean = false
+        private val omitAcceptance: Boolean = false,
+        private val cleanupServices: Set<String> = emptySet()
     ) : java.io.Closeable {
         val identity = AdbIdentity()
         private val credentials = identity.loadOrCreate()
@@ -93,7 +95,7 @@ class AdbConnectionIntegrationTest {
                         assertEquals(AdbWire.OPEN, request.command)
                         val service = request.payload.toString(Charsets.UTF_8).trimEnd('\u0000')
                         opened.add(service)
-                        assertTrue(InventoryCommand.entries.any { service == "shell,v2,raw:${it.command}" })
+                        assertTrue(service in cleanupServices || InventoryCommand.entries.any { service == "shell,v2,raw:${it.command}" })
                         val local = request.arg0
                         val remote = 17
                         AdbWire.write(secureOut, AdbWire.Packet(AdbWire.OKAY, remote, local))
@@ -140,6 +142,29 @@ class AdbConnectionIntegrationTest {
             }
             peer.verify()
             assertEquals(2, peer.opened.size)
+        }
+    }
+    @Test(timeout = 30000) fun typedCleanupCommandsStayBehindTlsAndApproval() {
+        val name = "com.netflix.ninja"
+        val commands = setOf("shell,v2,raw:pm disable-user --user 0 $name",
+            "shell,v2,raw:pm default-state --user 0 $name", "shell,v2,raw:pm enable --user 0 $name",
+            "shell,v2,raw:dumpsys package $name") + CleanupRead.entries.map { "shell,v2,raw:${it.command}" }
+        Peer(cleanupServices = commands).use { peer ->
+            TlsInventoryClient(peer.identity).use { client ->
+                client.connect(peer.target, peer.hash)
+                assertThrows(IllegalStateException::class.java) { client.change(name, PackageChange.DISABLE) }
+                assertTrue(peer.opened.isEmpty())
+                client.approveServerKey()
+                assertThrows(IllegalArgumentException::class.java) { client.change("$name;reboot", PackageChange.DISABLE) }
+                assertThrows(IllegalArgumentException::class.java) { client.change("com.android.settings", PackageChange.DISABLE) }
+                assertTrue(peer.opened.isEmpty())
+                client.packageDetails(name)
+                CleanupRead.entries.forEach { client.inspect(it) }
+                PackageChange.entries.forEach { client.change(name, it) }
+            }
+            peer.verify()
+            assertEquals(commands, peer.opened.toSet())
+            assertEquals(commands.size, peer.opened.size)
         }
     }
     @Test(timeout = 30000) fun wrongPinnedServerKeyCannotOpenInventory() {
