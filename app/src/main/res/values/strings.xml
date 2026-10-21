@@ -1,0 +1,9 @@
+<resources>
+    <string name="scan_status">%1$s\n%2$s</string>
+    <plurals name="discovered_services">
+        <item quantity="one">%d debugging service found</item>
+        <item quantity="other">%d debugging services found</item>
+    </plurals>
+    <string name="safety_result">%1$s\n%2$s</string>
+    <color name="launcher_background">#00665E</color>
+</resources>

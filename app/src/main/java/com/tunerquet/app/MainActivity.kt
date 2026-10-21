@@ -1,89 +1,227 @@
 package com.tunerquet.app
 
 import android.app.Activity
-import android.os.Bundle
 import android.graphics.Color
-import android.view.ViewGroup
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Bundle
+import android.view.View
+import android.view.WindowInsets
 import android.widget.*
 
-/** Read-only prototype. Does not pair with ADB or modify TV packages. */
+/** Read-only companion app. Discovery never opens an ADB connection. */
 class MainActivity : Activity() {
     private lateinit var content: LinearLayout
-    private var discovery: Discovery? = null
-    private val endpoints = linkedSetOf<String>()
+    private lateinit var discovery: Discovery
+    private var scan = ScanState()
+    private var screen = "home"
     private var currentProfile = Profile.CONSERVATIVE
+    private var scanStatus: TextView? = null
+    private var scanResults: LinearLayout? = null
+    private var scanButton: Button? = null
+    private var scanProgress: ProgressBar? = null
+    private val ink = Color.rgb(25, 47, 55)
+    private val muted = Color.rgb(67, 89, 97)
+    private val accent = Color.rgb(0, 102, 94)
+    private val preferences by lazy { getSharedPreferences("preferences", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val scroll = ScrollView(this)
-        content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 30, 32, 32) }
+        currentProfile = Profile.entries.firstOrNull {
+            it.name == preferences.getString("profile", null)
+        } ?: Profile.CONSERVATIVE
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(242, 247, 247))
+            isFillViewport = true
+        }
+        content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(20), dp(24), dp(28))
+        }
         scroll.addView(content)
         setContentView(scroll)
-        showHome()
+        if (Build.VERSION.SDK_INT >= 30) {
+            scroll.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) { if (screen == "home") finish() else showHome() }
+        }
+        discovery = Discovery(this) { state ->
+            scan = state
+            if (screen == "discovery") renderScan()
+        }
+        when (savedInstanceState?.getString("screen")) {
+            "discovery" -> showDiscovery(false)
+            "profiles" -> showProfiles()
+            "safety" -> showSafety()
+            "setup" -> showInstructions()
+            else -> showHome()
+        }
     }
-    private fun title(s: String) = TextView(this).also {
-        it.text = s; it.textSize = 24f; it.setTextColor(Color.rgb(20, 40, 50)); it.setPadding(0, 12, 0, 18)
-        content.addView(it)
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun text(value: String, size: Float = 16f, parent: LinearLayout = content, bold: Boolean = false): TextView =
+        TextView(this).also {
+            it.text = value
+            it.textSize = size
+            it.setTextColor(if (bold) ink else muted)
+            if (bold) it.setTypeface(null, Typeface.BOLD)
+            it.setLineSpacing(dp(3).toFloat(), 1f)
+            it.setPadding(0, dp(6), 0, dp(14))
+            parent.addView(it)
+        }
+    private fun button(label: String, action: () -> Unit): Button = Button(this).also {
+        it.text = label
+        it.isAllCaps = false
+        it.setTextColor(accent)
+        it.minHeight = dp(52)
+        content.addView(it, LinearLayout.LayoutParams(-1, -2))
+        it.setOnClickListener { action() }
     }
-    private fun paragraph(s: String) = TextView(this).also {
-        it.text = s; it.textSize = 15f; it.setPadding(0, 5, 0, 18); content.addView(it)
+    private fun card(heading: String, body: String, parent: LinearLayout = content) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(12), dp(18), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), Color.rgb(214, 228, 227))
+            }
+        }
+        parent.addView(box, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        text(heading, 18f, box, true)
+        text(body, parent = box)
     }
-    private fun button(text: String, action: () -> Unit) = Button(this).also { it.text = text; content.addView(it); it.setOnClickListener { action() } }
-    private fun reset() = content.removeAllViews()
+    private fun reset(destination: String, heading: String, subtitle: String) {
+        screen = destination
+        discovery.stop()
+        scanStatus = null
+        scanResults = null
+        scanButton = null
+        scanProgress = null
+        content.removeAllViews()
+        text("TUNERQUET  /  READ ONLY", 12f, bold = true)
+        text(heading, 30f, bold = true).accessibilityHeadingCompat()
+        text(subtitle)
+    }
+    private fun TextView.accessibilityHeadingCompat() {
+        if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+    }
 
     private fun showHome() {
-        reset(); title("Tunerquet")
-        paragraph("Android TV / Google TV optimization · v0.1 discovery prototype")
-        paragraph("Read-only mode. This build does not pair with ADB, inspect installed apps, disable packages, or restart a TV.")
-        button("Scan local network for debugging endpoints") { showDiscovery() }
-        button("Explore cleanup profiles") { showProfiles() }
-        button("Safety and setup instructions") { showInstructions() }
+        reset("home", "A clearer view of your TV", "Discover debugging services and explore safer cleanup plans.")
+        card("Discovery is ready", "Find advertised debugging endpoints on your local network. Discovered services are unverified and may belong to any Android device.")
+        button("Discover devices") { showDiscovery() }
+        button("Explore profiles · ${currentProfile.displayName}") { showProfiles() }
+        button("Check package safety") { showSafety() }
+        button("TV setup guide") { showInstructions() }
+        card("What comes next", "Secure pairing → read-only inventory → verified proposals → your approval. Pairing, package changes and reboot are not available in this build.")
     }
-    private fun showDiscovery() {
-        discovery?.stop(); reset(); title("Discover TVs")
-        paragraph("Connect your phone and TV to the same network. Enable Developer Options and Wireless Debugging on the TV. Discovery is limited to advertised ADB endpoints; a TV may not appear until debugging is enabled.")
-        val status = TextView(this).also { content.addView(it); it.text = "Scanning…" }
-        endpoints.clear()
-        discovery = Discovery(this) { endpoint ->
-            runOnUiThread {
-                if (endpoints.add(endpoint)) status.text = endpoints.joinToString("\n\n")
-            }
+
+    private fun showDiscovery(start: Boolean = true) {
+        reset("discovery", "Discover devices", "Use the same local network as your TV and enable Wireless Debugging. Pairing and connection services can have different ports.")
+        scanStatus = text("").apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        scanProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).also {
+            it.isIndeterminate = true
+            content.addView(it, LinearLayout.LayoutParams(-1, dp(4)))
         }
-        discovery?.start()
-        button("Stop scan") { discovery?.stop(); status.append("\n\nScan stopped.") }
-        button("Back") { discovery?.stop(); showHome() }
+        scanButton = button("Scan again") {
+            if (scan.scanning) discovery.stop() else discovery.start()
+        }
+        scanResults = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; content.addView(this) }
+        button("Back to home") { showHome() }
+        if (start) discovery.start() else renderScan()
     }
+    private fun renderScan() {
+        scanStatus?.text = getString(R.string.scan_status, scan.message,
+            resources.getQuantityString(R.plurals.discovered_services, scan.endpoints.size, scan.endpoints.size))
+        scanButton?.text = if (scan.scanning) "Stop scan" else "Scan again"
+        scanProgress?.visibility = if (scan.scanning) View.VISIBLE else View.GONE
+        val results = scanResults ?: return
+        results.removeAllViews()
+        if (scan.endpoints.isEmpty()) {
+            card(if (scan.scanning) "Looking for advertisements…" else "No results to show",
+                "Keep Wireless Debugging open on the TV. If nothing appears, check Wi-Fi, guest network isolation and VPN settings, then scan again.", results)
+        }
+        scan.endpoints.forEach { endpoint ->
+            card(endpoint.kind.label, "${endpoint.name}\n${endpoint.address}\nUnverified advertisement · pairing is not yet available", results)
+        }
+        if (!scan.scanning && scan.endpoints.isNotEmpty()) {
+            text("Results are from the last scan and may have changed.", 14f, results)
+        }
+        scan.errors.forEach { card("Scan issue", it, results) }
+    }
+
     private fun showProfiles() {
-        reset(); title("Cleanup profiles")
-        paragraph("Profiles are planning presets, not an authorization to disable packages. Actual cleanup must always be preceded by inventory, dependency analysis and explicit approvals.")
-        val profiles = Profile.entries.toTypedArray()
-        val spinner = Spinner(this)
-        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, profiles.map { it.name.replace('_', ' ') })
+        reset("profiles", "Choose a starting point", "Presets describe future proposals. Choosing one does not approve any package changes.")
+        val profiles = Profile.entries
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, profiles.map { it.displayName })
+            contentDescription = "Cleanup profile"
+            minimumHeight = dp(52)
+            setSelection(profiles.indexOf(currentProfile))
+        }
         content.addView(spinner)
-        val details = TextView(this).also { it.setPadding(0, 22, 0, 14); content.addView(it) }
-        fun update(i: Int) {
-            currentProfile = profiles[i]
-            details.text = when (currentProfile) {
-                Profile.CONSERVATIVE -> "Conservative: high-confidence optional bloatware candidates only."
-                Profile.BALANCED -> "Balanced: additional optional components, with user review."
-                Profile.AGGRESSIVE -> "Aggressive: more extensive proposals; never touches protected services."
-                Profile.ESSENTIALS_ONLY -> "HIGH RISK: minimum verified functional TV features only. Unknown dependencies must remain enabled."
-                Profile.CUSTOM -> "AT YOUR OWN RISK: user-defined package selection; known critical system services remain locked."
+        val details = text(currentProfile.description)
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                currentProfile = profiles[position]
+                preferences.edit().putString("profile", currentProfile.name).apply()
+                details.text = currentProfile.description
             }
         }
-        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) { update(position) }
+        card("Protected in every profile", "Core services, launchers, keyboards, TV inputs and known dependencies stay locked. Uncertain packages stay enabled. No inventory has been collected yet.")
+        button("Back to home") { showHome() }
+    }
+
+    private fun showSafety() {
+        reset("safety", "Understand package safety", "Check the baseline policy for a package identifier. This is not an inspection of your TV.")
+        val input = EditText(this).apply {
+            hint = "com.vendor.package"
+            contentDescription = "Package identifier"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            setSingleLine(true)
         }
-        update(0)
-        button("Back") { showHome() }
+        content.addView(input, LinearLayout.LayoutParams(-1, -2))
+        val result = text("Enter a package identifier to see its safety rationale.").apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        button("Explain safety") {
+            val assessment = Safety.assess(input.text.toString().trim())
+            result.text = getString(R.string.safety_result, assessment.risk.name, assessment.reason)
+        }
+        card("Device evidence comes first", "An active launcher or keyboard can use an unfamiliar package name. Authenticated inventory and dependency checks are required before any package can be proposed for cleanup.")
+        button("Back to home") { showHome() }
     }
+
     private fun showInstructions() {
-        reset(); title("Pairing prerequisites")
-        paragraph("On the TV: Settings → System / Device Preferences → About → tap Build repeatedly to unlock Developer Options. Locate Wireless Debugging, enable it, and choose Pair device with pairing code. Menu names vary by manufacturer and Android version.")
-        paragraph("A future version will pair using the displayed pairing code and pairing port, securely store device keys, authenticate ADB, then perform a read-only package and memory scan. Never enter the pairing code into an unrelated website.")
-        paragraph("Hard safety policy: do not disable Google Play services, Play Store, Settings, System UI, setup, keyboard, Bluetooth, HDMI, TV input, tuner or boot-essential services. Unknown packages stay enabled.")
-        button("Back") { showHome() }
+        reset("setup", "Prepare your TV", "Menu names vary by manufacturer and Android version.")
+        card("1 · Use your local network", "Connect the phone and TV to the same trusted network. Guest network isolation can prevent discovery.")
+        card("2 · Enable developer options", "On the TV, open Settings → System / Device Preferences → About. Select Build repeatedly until developer options are enabled.")
+        card("3 · Open Wireless Debugging", "Enable Wireless Debugging in developer options. Choose Pair device with pairing code to advertise the pairing service. Older TVs may only support legacy ADB.")
+        card("4 · Discover services", "Return to Discover devices. A result confirms only an advertisement. Secure pairing and authentication are planned; do not enter your pairing code into unrelated websites.")
+        card("When you finish", "Turn off Wireless Debugging when you no longer need it.")
+        button("Discover devices") { showDiscovery() }
+        button("Back to home") { showHome() }
     }
-    override fun onDestroy() { discovery?.stop(); super.onDestroy() }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("screen", screen)
+        super.onSaveInstanceState(outState)
+    }
+    @Suppress("DEPRECATION")
+    @Deprecated("Legacy back dispatch for the API 26 Activity")
+    override fun onBackPressed() {
+        if (screen != "home") showHome() else super.onBackPressed()
+    }
+    override fun onStop() { discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
+    override fun onDestroy() { discovery.stop(); super.onDestroy() }
 }

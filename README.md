@@ -1,31 +1,34 @@
-# Tunerquet v0.1 — Android Studio starter
+# Tunerquet v0.2 — Android TV companion prototype
 
-Tunerquet is an Android TV/Google TV optimizer. This initial project is a **read-only discovery and profiles prototype**. It does NOT yet implement authenticated ADB, inventory, memory measurement, cleanup execution, rollback, settings modifications, or reboot. It must not be marketed as a working debloater.
+Tunerquet is a handset companion for Android TV / Google TV optimization. This build provides **read-only discovery, profile planning and baseline safety explanations**. It does not yet implement authenticated ADB, installed-package inventory, memory measurements, cleanup execution, rollback, settings modifications or reboot.
 
-## Android Studio
+## Build and run
 
-1. Unzip and select **Open** → the `Tunerquet` folder (the folder containing `settings.gradle.kts`).
-2. Install Android SDK Platform 35 and Build Tools through SDK Manager if prompted.
-3. Let Gradle synchronize (internet needed to fetch Android Gradle Plugin and Kotlin plugin).
-4. Choose a connected Android handset or emulator; click **Run**.
-5. Alternatively run `gradlew.bat assembleDebug` once Android Studio has generated/configured a Gradle wrapper, or use installed Gradle 8.11.1. This zip intentionally does not contain an unverified wrapper JAR.
+1. Open this folder in Android Studio and install Android SDK Platform 35.
+2. Use JDK 17 or newer (verified here with JDK 21).
+3. Let Gradle synchronize. The included wrapper uses Gradle 8.11.1 with a pinned distribution SHA-256; its JAR was verified against Gradle's published checksum.
+4. Run on an Android handset or emulator (Android 8.0 / API 26 or newer).
+
+From PowerShell, with `ANDROID_HOME` pointing to your SDK (or `sdk.dir` in an untracked `local.properties`):
+
+```powershell
+./gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. First use requires internet access to download build dependencies.
 
 ## Current functionality
-- Native Android Activity with home, scan, profiles and setup screens.
-- mDNS scan for `_adb-tls-connect._tcp`, `_adb-tls-pairing._tcp`, and `_adb._tcp` endpoints.
-- Five cleanup profile descriptions.
-- Safety classification that defaults unknown packages to protected-from-automatic-cleanup.
-- Unit test examples.
 
-## Engineering roadmap for Codex
-1. Implement documented secure ADB TLS pairing/connect and legacy RSA-authenticated ADB, including key storage and timeout/error handling. Never transmit ADB commands to unpaired/unapproved targets.
-2. Read-only inventory via `pm list packages -f -U`, `dumpsys package`, `pm list packages -d`, `cat /proc/meminfo`, `df`, `dumpsys meminfo`; distinguish RAM from disk and cached memory.
-3. Device-specific safety engine: immutable protected packages, current launcher/input methods, default keyboard, input/TV/HDMI/Bluetooth components, package dependencies and vendor allowlists. Leave uncertain packages enabled.
-4. Explain per-package rationale and risk; profiles only propose changes after verified classification. Persist and export Custom profiles with vendor/model/package metadata.
-5. Approval UI and batch review; journal original state before every command; system packages via `pm disable-user --user 0 PACKAGE`, rollback via `pm enable --user 0 PACKAGE`; never auto-uninstall system packages. Require extra confirmation for risky proposals.
-6. Settings snapshot/edit/restore, per-command progress, robust error recovery, pause/cancel between operations.
-7. Enforce >=30 seconds since last modification before presenting an enabled user-controlled reboot; reconnect, verify TV health, collect comparable before/after readings. Do not claim success without confirmation.
-8. Test on Android TV, Google TV, sticks and OEM-integrated sets. Use mock ADB layer for tests.
+- Native screens with density-aware spacing, system-bar insets, accessible headings/status updates and an adaptive launcher icon.
+- Bounded 30-second mDNS scans for secure connection, pairing and legacy ADB services, with typed endpoints, IPv6 formatting, error reporting, rescan and stop controls.
+- Sequential NSD resolution, removal of lost services and rejection of late results after stop or restart. Scanning stops when the Activity leaves the foreground.
+- Five planning profiles; the selected preset survives navigation and app restarts. Custom package selection, saving and export remain planned.
+- Baseline package safety checker with human-readable rationale. No TV is inspected by this screen.
+- Device safety context for active launchers, input methods, required components and their dependencies. These protections override optional-package evidence.
+- Fail-closed authorization: caller-supplied low risk is insufficient. The policy also requires verified inventory, device-specific optional evidence and explicit approval. There is no command execution path in this build.
 
-## Build attempt status
-Source-level project generated in a container with JDK 21. No installed Android SDK or Gradle executable were available, so Android APK compilation could not be performed in that runtime.
+## Roadmap and validation
+
+See [ROADMAP.md](ROADMAP.md) for implementation status and the next milestones. Secure authentication is the next major dependency before real inventory can be connected to the safety engine.
+
+On October 20, 2026, the debug APK built successfully and all 15 JVM tests passed using SDK 35 / JDK 21. Android lint reported no issues (zero errors or warnings). No emulator or physical device was connected, so runtime layout, back gestures and real-network discovery still need the manual checks in the roadmap. The unit tests cover safety decisions and endpoint formatting; they do not simulate Android NSD callbacks.
