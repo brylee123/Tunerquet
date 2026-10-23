@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.netflix.ninja" android:versionCode="555001" android:versionName="cleanup-fixture">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <application android:label="Tunerquet cleanup TEST FIXTURE" android:hasCode="false" android:debuggable="true">
+        <meta-data android:name="com.tunerquet.cleanup.fixture" android:value="true" />
+    </application>
+</manifest>

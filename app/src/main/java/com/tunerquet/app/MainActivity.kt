@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import com.tunerquet.app.adb.*
 import com.tunerquet.app.inventory.*
+import com.tunerquet.app.cleanup.*
 import java.util.concurrent.Executor
 import android.graphics.Color
 import android.graphics.Typeface
@@ -16,13 +17,20 @@ import android.view.View
 import android.view.WindowInsets
 import android.widget.*
 
-/** Read-only companion app. Discovery never opens an ADB connection. */
+/** Companion app. Discovery never opens an ADB connection; cleanup needs separate approval. */
 class MainActivity : Activity() {
     private lateinit var content: LinearLayout
     private lateinit var discovery: Discovery
     private var scan = ScanState()
     private lateinit var pairing: PairingSession
     private lateinit var pairedDevices: AndroidPairedDeviceStore
+    private lateinit var cleanup: CleanupSession
+    private lateinit var cleanupJournal: AndroidCleanupJournal
+    private var cleanupStatus: TextView? = null
+    private var cleanupResults: LinearLayout? = null
+    private var cleanupInputs = emptyList<View>()
+    private var cleanupPrepare: Button? = null
+    private var cleanupCancel: Button? = null
     private lateinit var inventory: InventorySession
     private var inventoryStatus: TextView? = null
     private var inventoryTrust: LinearLayout? = null
@@ -88,7 +96,11 @@ class MainActivity : Activity() {
             Executor { mainHandler.post(it) }, { if (screen == "pairing") renderPairing(it) })
         inventory = InventorySession({ TlsInventoryClient(identity) }, pairedDevices,
             Executor { mainHandler.post(it) }, { if (screen == "inventory") renderInventory(it) })
+        cleanupJournal = AndroidCleanupJournal(this)
+        cleanup = CleanupSession({ TlsInventoryClient(identity) }, pairedDevices, cleanupJournal,
+            Executor { mainHandler.post(it) }, { if (screen == "cleanup") renderCleanup(it) })
         when (savedInstanceState?.getString("screen")) {
+            "cleanup" -> showCleanup()
             "discovery" -> showDiscovery(false)
             "pairing" -> showPairing()
             "inventory" -> showInventory()
@@ -133,6 +145,12 @@ class MainActivity : Activity() {
         text(body, parent = box)
     }
     private fun reset(destination: String, heading: String, subtitle: String) {
+        cleanup.reset()
+        cleanupStatus = null
+        cleanupResults = null
+        cleanupInputs = emptyList()
+        cleanupPrepare = null
+        cleanupCancel = null
         pairing.reset()
         inventory.reset()
         inventoryStatus = null
@@ -155,7 +173,7 @@ class MainActivity : Activity() {
         scanButton = null
         scanProgress = null
         content.removeAllViews()
-        text("TUNERQUET  /  NO PACKAGE CHANGES", 12f, bold = true)
+        text("TUNERQUET  /  DISABLE & RESTORE", 12f, bold = true)
         text(heading, 30f, bold = true).accessibilityHeadingCompat()
         text(subtitle)
     }
@@ -169,10 +187,11 @@ class MainActivity : Activity() {
         button("Discover devices") { showDiscovery() }
         button("Pair using a TV code") { showPairing() }
         button("Connect and read inventory") { showInventory() }
+        button("Disable apps and restore") { showCleanup() }
         button("Explore profiles · ${currentProfile.displayName}") { showProfiles() }
         button("Check package safety") { showSafety() }
         button("TV setup guide") { showInstructions() }
-        card("What comes next", "Pair with your TV, then connect to read package, RAM and storage information. Package changes and reboot are not available in this build.")
+        card("What comes next", "Pair with your TV and read its inventory. Cleanup can disable selected recognized user-installed media apps and restore their original enabled state. System apps stay locked.")
     }
 
     private fun showDiscovery(start: Boolean = true) {
@@ -417,7 +436,7 @@ class MainActivity : Activity() {
         results.removeAllViews()
         val snapshot = state.snapshot ?: return
         val time = java.text.DateFormat.getDateTimeInstance().format(java.util.Date(snapshot.completedAt))
-        card(if (snapshot.complete) "Inventory snapshot" else "Partial inventory snapshot", "${snapshot.address}\n$time\nConnection closed. Readings can change; refresh to collect a new snapshot.\nCleanup stays locked pending device dependency analysis.", results)
+        card(if (snapshot.complete) "Inventory snapshot" else "Partial inventory snapshot", "${snapshot.address}\n$time\nConnection closed. Readings can change; refresh to collect a new snapshot.\nSystem-app cleanup stays locked pending device dependency analysis.", results)
         val model = snapshot.properties["ro.product.model"] ?: "Unknown model"
         val vendor = snapshot.properties["ro.product.manufacturer"] ?: "Unknown manufacturer"
         val sdk = snapshot.properties["ro.build.version.sdk"] ?: "Unknown"
@@ -463,6 +482,113 @@ class MainActivity : Activity() {
             }
         }
     }
+    private fun showCleanup() {
+        reset("cleanup", "Disable apps and restore", "Disabling stops an app for user 0 while keeping its APK and data. Restoring returns its original enabled state. Review every selection; no apps are selected automatically.")
+        card("Conservative first release", "Only recognized user-installed media apps are eligible. System apps, unknown packages, launchers, keyboards and shared UIDs stay locked. Profiles do not authorize changes. Disabling does not promise disk or RAM savings.")
+        val devices = try { pairedDevices.list() } catch (_: Exception) { emptyList() }
+        if (devices.isEmpty()) {
+            card("Pair and read inventory first", "A previously approved server key is required for cleanup.")
+            button("Pair using a TV code") { showPairing() }
+            button("Back to home") { showHome() }
+            return
+        }
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, devices.map { "${it.host} · ${it.guid}" })
+            contentDescription = "TV for cleanup"
+            minimumHeight = dp(52)
+        }
+        content.addView(spinner)
+        fun field(label: String) = EditText(this).also {
+            it.hint = label; it.contentDescription = label; it.setSingleLine(true); it.isSaveEnabled = false
+            content.addView(it, LinearLayout.LayoutParams(-1, -2))
+        }
+        val host = field("TV IP address")
+        val port = field("Connection port").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        fun selectDevice() {
+            val d = devices[spinner.selectedItemPosition]
+            host.setText(d.host); port.setText(d.connectionPort?.toString() ?: "")
+        }
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { selectDevice() }
+        }
+        selectDevice()
+        val approve = CheckBox(this).apply {
+            setText(R.string.cleanup_approval)
+            isSaveEnabled = false
+            content.addView(this)
+        }
+        cleanupInputs = listOf(spinner, host, port, approve)
+        cleanupStatus = text("").apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        cleanupPrepare = button("Prepare fresh cleanup check") {
+            try { cleanup.prepare(devices[spinner.selectedItemPosition].guid, ConnectionTarget.parse(host.text.toString(), port.text.toString()), approve.isChecked) }
+            catch (e: Exception) { cleanupStatus?.text = e.message }
+        }
+        cleanupCancel = button("Stop and disconnect") { cleanup.cancel() }
+        cleanupResults = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; content.addView(this) }
+        val log = try { cleanupJournal.list() } catch (_: Exception) {
+            card("Journal unavailable", "Saved changes could not be read. Cleanup will remain blocked; preserve this app's data for recovery.")
+            emptyList()
+        }
+        val unresolved = log.count { it.status != ChangeStatus.RESTORED }
+        card("Saved change journal", "$unresolved entries need restore or verification. Prepare a fresh check for the same paired TV and server key to access recovery. Clearing app data or uninstalling Tunerquet loses this journal.")
+        button("Back to home") { showHome() }
+        renderCleanup(cleanup.state)
+    }
+    private fun renderCleanup(state: CleanupState) {
+        cleanupStatus?.text = state.message
+        val running = state.phase in setOf(CleanupPhase.CHECKING, CleanupPhase.REVIEW, CleanupPhase.APPLYING)
+        cleanupInputs.forEach { it.isEnabled = !running }
+        cleanupPrepare?.isEnabled = !running
+        cleanupCancel?.visibility = if (running) View.VISIBLE else View.GONE
+        val box = cleanupResults ?: return
+        box.removeAllViews()
+        if (state.phase == CleanupPhase.REVIEW) {
+            text("Select apps to disable · user 0", 20f, box, true)
+            if (state.candidates.isEmpty()) card("No eligible apps", "No recognized enabled user-installed media apps passed all checks. System and unknown apps remain locked. Saved changes can still be restored below.", box)
+            val selected = linkedSetOf<String>()
+            state.candidates.forEach { candidate ->
+                card(candidate.label, "${candidate.evidence.pkg.name}\n${candidate.consequence}\nVersion: ${candidate.evidence.pkg.versionName}", box)
+                val check = CheckBox(this).apply {
+                    text = getString(R.string.cleanup_select, candidate.label); isSaveEnabled = false
+                    setOnCheckedChangeListener { _, value ->
+                        if (value) selected.add(candidate.evidence.pkg.name) else selected.remove(candidate.evidence.pkg.name)
+                    }
+                }
+                box.addView(check)
+            }
+            if (state.candidates.isNotEmpty()) button("Review selected apps", box) {
+                val names = selected.toSet()
+                if (names.isEmpty()) { cleanupStatus?.setText(R.string.cleanup_select_required); return@button }
+                val reviewed = state.candidates.filter { it.evidence.pkg.name in names }
+                AlertDialog.Builder(this).setTitle("Disable ${names.size} selected apps?")
+                    .setMessage("For user 0 on the checked TV:\n\n" + reviewed.joinToString("\n\n") { "${it.evidence.pkg.name}\n${it.consequence}" } + "\n\nOriginal states are journaled before each command. Stop/cancel cannot undo a command already sent. Restore is available from the journal.")
+                    .setPositiveButton("Disable selected") { _, _ ->
+                        try { cleanup.apply(names, true) } catch (e: Exception) { cleanupStatus?.text = e.message }
+                    }.setNegativeButton("Keep enabled", null).show()
+            }
+        }
+        if (state.records.isNotEmpty()) {
+            text("Saved changes", 20f, box, true)
+            state.records.sortedByDescending { it.createdAt }.forEach { record ->
+                val meaning = when (record.status) {
+                    ChangeStatus.DISABLED -> "Verified disabled"
+                    ChangeStatus.RESTORED -> "Original state verified restored"
+                    ChangeStatus.PENDING, ChangeStatus.RESTORING -> "Uncertain: command may have completed; check and restore"
+                }
+                card(record.evidence.pkg.name, "$meaning\n${record.address}\nOriginal state: ${if (record.evidence.enabledState == 0) "manifest default" else "explicitly enabled"}", box)
+                if (record.status != ChangeStatus.RESTORED && state.phase == CleanupPhase.REVIEW) {
+                    button("Check and restore original state", box) {
+                        AlertDialog.Builder(this).setTitle("Restore ${record.evidence.pkg.name}?")
+                            .setMessage("Reconnect approval applies to the checked TV. Restore changes only this journaled app back to its saved enabled state. Apps disabled before cleanup are never added to this journal.")
+                            .setPositiveButton("Restore") { _, _ ->
+                                try { cleanup.restore(record.id, true) } catch (e: Exception) { cleanupStatus?.text = e.message }
+                            }.setNegativeButton("Cancel", null).show()
+                    }
+                }
+            }
+        }
+    }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("screen", screen)
         super.onSaveInstanceState(outState)
@@ -472,6 +598,6 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (screen != "home") showHome() else super.onBackPressed()
     }
-    override fun onStop() { inventory.cancel(); pairingCode?.text?.clear(); pairing.cancel(); discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
-    override fun onDestroy() { inventory.close(); pairing.close(); discovery.stop(); super.onDestroy() }
+    override fun onStop() { cleanup.cancel(); inventory.cancel(); pairingCode?.text?.clear(); pairing.cancel(); discovery.stop("Scan stopped while the app was in the background."); super.onStop() }
+    override fun onDestroy() { cleanup.close(); inventory.close(); pairing.close(); discovery.stop(); super.onDestroy() }
 }

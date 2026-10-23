@@ -12,4 +12,7 @@
     <string name="inventory_approval">I confirm this TV and approve reading its inventory.</string>
     <string name="inventory_running">An inventory request is already running. Cancel it before retrying.</string>
     <string name="inventory_trust_expired">This connection expired. Start a new connection before trusting a key.</string>
+    <string name="cleanup_approval">I approve reconnecting to this TV to check app state for cleanup. Changes require a separate review.</string>
+    <string name="cleanup_select">Select %1$s</string>
+    <string name="cleanup_select_required">Select at least one app.</string>
 </resources>

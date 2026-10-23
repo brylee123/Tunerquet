@@ -1,6 +1,6 @@
-# Tunerquet v0.4 — Android TV companion prototype
+# Tunerquet v0.5 — Android TV companion prototype
 
-Tunerquet is a handset companion for Android TV / Google TV optimization. It provides local discovery, explicit Wireless Debugging pairing, authenticated TLS connections and **read-only package/RAM/storage inventory**. Profile planning and baseline package safety explanations remain available. Package cleanup, settings edits, rollback and reboot are not implemented.
+Tunerquet is a handset companion for Android TV / Google TV optimization. It provides local discovery, explicit Wireless Debugging pairing, authenticated TLS connections, package/RAM/storage inventory and **reviewed, disable-only cleanup with journaled restore**. Initial cleanup eligibility is limited to recognized user-installed media apps. System-app cleanup, settings edits and reboot remain unavailable.
 
 ## Build and run
 
@@ -37,7 +37,7 @@ The app checks the saved pairing record again before every request. If the TV ex
 
 ### Inventory and partial results
 
-Only these fixed requests are exposed by the transport:
+The inventory flow exposes these fixed read-only requests:
 
 | Request | Reading |
 | --- | --- |
@@ -56,10 +56,26 @@ RAM and filesystem storage are labeled separately. Free/cached RAM is not substi
 
 ## Safety and profiles
 
-Five planning presets persist the selected profile. The baseline safety checker explains immutable package protections. Inventory does **not** populate verified optional-package evidence or a complete dependency graph. No package becomes eligible for cleanup merely because it was inventoried, and there is no mutation API or custom command field.
+Five planning presets persist the selected profile. The baseline safety checker explains immutable package protections. Inventory does **not** populate verified optional-system-package evidence or a complete dependency graph. System apps and unfamiliar packages remain locked. Profiles, imports and manually supplied risk labels cannot authorize changes.
+
+## Disable-only cleanup and restore
+
+1. Pair with the TV, then read inventory and explicitly trust its server key.
+2. Open **Disable apps and restore**, select the same TV and its current connection port, approve fresh checks, and select **Prepare fresh cleanup check**.
+3. Review eligible apps and their feature-loss explanation. Nothing is preselected. Select apps, then **Review selected apps** and confirm the complete batch.
+4. Each operation saves the original state in an atomic write-ahead journal before sending pm disable-user --user 0 PACKAGE. A second package-state read must confirm enabled=3; command text or exit status alone never proves success.
+5. Prepare a fresh check to access **Check and restore original state** for each saved entry. Restore uses pm default-state --user 0 PACKAGE for original state 0, or pm enable --user 0 PACKAGE for original state 1, and verifies the result. See the [AOSP enabled-state commands](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/pm/PackageManagerShellCommand.java).
+
+The initial catalog covers the Netflix phone/TV, Disney+, Prime Video phone/TV, Hulu, Spotify TV and YouTube TV package identifiers listed in CleanupPolicy.optionalMedia. These identifiers describe intended media clients, not a guarantee of vendor compatibility or app authenticity. Only enabled user-installed apps under /data/app/, with known version/state, a unique ordinary app UID, no reported shared/required/library role and no launcher/keyboard role can appear. System or updated-system packages are excluded even if their identifier is in the catalog. This is a separate, explicitly reviewed user-app policy; it does not relax the existing optional-system-package policy or assert complete dependency analysis.
+
+Cleanup checks the active user (only user 0 is supported), fresh package/UID/system/disabled lists, all HOME handlers and installed input methods. It rechecks the selected batch after review, then the exact original app state before each change. Unknown or malformed evidence leaves apps locked. Package arguments are validated and commands use closed enums; there is no uninstall, data-clear, arbitrary shell or reboot action.
+
+The journal stays in noBackupFilesDir across process death and stores TV GUID/key, package identity/version, original state, timestamps and pending/verified/restore status. Journal write failure prevents the next mutation. Connection loss, stop/background/navigation or the five-minute session deadline closes the connection and stops later operations; an already-sent command may complete. Pending/restoring entries remain explicitly uncertain and can be checked/restored after reconnecting. Apps already disabled before cleanup never enter the plan or journal. Restoration requires the same trusted GUID/server key and unchanged package identity/version; a changed key, app update or externally changed enabled state requires manual inspection/TV Settings. Unreadable journals block new cleanup instead of silently resetting history. Clearing app data or uninstalling Tunerquet loses this recovery journal.
+
+Disabling retains the installed APK and app data, and stops playback/background work/integrations until restored. It does not promise recovered disk space or RAM savings. Android package changes are not transactional: concurrent external changes can still race a check. Any failure stops the batch; successful earlier entries remain recorded for individual restoration.
 
 ## Validation and remaining work
 
-Validation: the debug APK builds, all 52 JVM tests and 23 Android tests pass, and lint reports zero issues. Android tests ran on an API 37 x86_64 emulator. The latter exercise native pairing, real TLS with the shipping KeyStore/Conscrypt providers, mocked ADB streams, actual Android package/memory/storage output, pin persistence and Activity recreation. No physical TV was contacted.
+Validation: the debug APK builds, all 69 JVM tests and 28 Android tests pass, and lint reports zero issues. Android tests ran on an API 37 x86_64 emulator. The latter exercise native pairing, real TLS with the shipping KeyStore/Conscrypt providers, mocked ADB streams, actual Android package/memory/storage output, pin persistence, cleanup approval recreation, atomic journal persistence, and an actual disable/restore round trip on an inert, signed emulator fixture with APK/data retention. See [fixture setup](app/src/androidTest/fixtures/README.md); the round-trip test skips on devices without that dedicated fixture. No physical TV was contacted.
 
-Real Android TV/Google TV, minimum-API clients, ARM ABIs and 16 KB page-size devices still need validation. Legacy RSA connections, credential rotation, vendor dependency analysis, profile proposals and cleanup remain future work. See [ROADMAP.md](ROADMAP.md).
+Real Android TV/Google TV, minimum-API clients, ARM ABIs and 16 KB page-size devices still need validation. Legacy RSA connections, credential rotation, vendor dependency analysis, profile proposals and system-app cleanup remain future work. See [ROADMAP.md](ROADMAP.md).
